@@ -177,21 +177,150 @@ class ByteStream(object):
             raise TypeError("Uknown Data Type: '%s'" % datatype)
         
         return data
+
+
+BIG = 0
+LITTLE = 1
+from bitstring import ConstBitStream
+
+class SC2Buffer(object):
+
+    def __init__(self, file_contents, endian=BIG):
+        if hasattr(file_contents,'read'): #is a file-like object
+            file_contents = file_contents.read()
+        self.stream = ConstBitStream(hex=file_contents.encode("hex"))
+        self.__endian = endian
+
+    def skip(self, bits=0, bytes=0):
+        self.stream.pos += bits + bytes*8
+
+    def read_int(self, bits=0, bytes=0, endian=None):
+        endian = endian or self.__endian
+        bit_count = bits+bytes*8
+        if bits!=0:
+            return self.stream.read(bit_count).uint
+        if endian == BIG:
+            return self.stream.read(bit_count).uintbe
+        elif endian == LITTLE:
+            return self.stream.read(bit_count).uintle
+    
+    def read_string(self,bytes=None):
+        char_count = bytes if bytes!=None else self.read_int(bytes=1)
+        chars = self.read_hex(bytes=char_count).decode("hex")
+        print len(chars)
+        if self.__endian == LITTLE:
+            chars = str(reversed(chars))
+        return chars
+
+    def byte_align(self):
+        self.stream.bytealign()
+
+    def read_count(self):
+        return self.read_int(bytes=1)/2
+
+    def read_hex(self, bits=0, bytes=0):
+        bit_count = bits+bytes*8
+        return self.stream.read(bit_count).hex[2:].upper()
+
+    def read_timestamp(self):
+        #The 7-8 bits of the first byte indicate the extra byte count
+        time = self.read_int(bits=6)
+        count = self.read_int(bits=2)
+        for i in range(0,count):
+            time = (time << 8) | self.read_int(bytes=1)
+        return time
+
+    def read_vlf(self):
+        #Loop through bytes until the first bit is zero
+        #build the result by adding new bits to the left
+        result, count = 0, 0
+        while(True):
+            flag = self.read_int(bits=1)
+            result += self.read_int(bits=7) << (7*count)
+            if flag:
+                count += 1
+            else:
+                #The last bit of the result is a sign flag
+                return pow(-1, result & 0x1) * (result >> 1)
+
+    def read_serialized_data(self):
+        #The first byte serves as a flag for the type of data to follow
+        datatype = self.read_int(bytes=1)
+        print hex(datatype)
+        if datatype == 0x02:
+            #0x02 is a byte string with the first byte indicating
+            #the length of the byte string to follow
+            data = self.read_string(self.read_count())
+            print data
+
+        elif datatype == 0x04:
+            #0x04 is an serialized data list with first two bytes always 01 00
+            #and the next byte indicating the number of elements in the list
+            #each element is a serialized data structure
+            self.skip(bytes=2)    #01 00
+            count = self.read_count()
+            data = [self.read_serialized_data() for i in range(0, count)]
+            print data
+
+        elif datatype == 0x05:
+            #0x05 is a serialized key,value structure with the first byte
+            #indicating the number of key,value pairs to follow
+            #When looping through the pairs, the first byte is the key,
+            #followed by the serialized data object value
+            data, count = dict(), self.read_count()
+            for i in range(0,count):
+                key,value = self.read_count(), self.read_serialized_data()
+                print "Dict key: %s" % key
+                data[key] = value #Done like this to keep correct parse order
+            
+        elif datatype == 0x06:
+            data = self.read_int(bytes=1)
+            
+        elif datatype == 0x07:
+            data = self.read_int(bytes=4)
+            
+        elif datatype == 0x09:
+            data = self.read_vlf()
+            
+        else:
+            raise TypeError("Uknown Data Type: '%s'" % datatype)
         
+        return data
+
+    def peek(self, bits=0, bytes=0, format="hex"):
+        return self.stream.peek('%s:%s' % (format,bits+bytes*8))
+
+    @property
+    def position(self):
+        return self.stream.pos
+
+    @property
+    def length(self):
+        return self.stream.len
+
+    @property
+    def remaining(self):
+        return (self.stream.len - self.stream.pos)
+
+    @property
+    def empty(self):
+        return self.remaining == 0
+
+
 def read_header(file):
-    source = ByteStream(file.read())
+    bytes = SC2Buffer(file.read())
     
     #Check the file type for the MPQ header bytes
-    if source.get_hex(4).upper() != "4D50511B":
+    if bytes.empty or bytes.read_hex(bytes=4) != '4D50511B':
         raise ValueError("File '%s' is not an MPQ file" % file.name)
     
     #Extract replay header data, we don't actually use this for anything
-    max_data_size = source.get_little_32() #possibly data max size
-    header_offset = source.get_little_32() #Offset of the second header
-    data_size = source.get_little_32()     #possibly data size
+    max_data_size = bytes.read_int(bytes=4,endian=LITTLE) #possibly data max size
+    header_offset = bytes.read_int(bytes=4,endian=LITTLE) #Offset of the second header
+    data_size = bytes.read_int(bytes=4,endian=LITTLE)     #possibly data size
     
     #Extract replay attributes from the mpq
-    data = source.parse_serialized_data()
+    data = bytes.read_serialized_data()
     
     #return the release and frames information
     return data[1],data[3]

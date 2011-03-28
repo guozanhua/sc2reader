@@ -55,12 +55,11 @@ class Attribute(object):
         #overridden by known attributes; acts as a flag for exclusion
         self.header, self.id, self.player, self.value, self.name = tuple(data+["Unknown"])
         
-        #Clean the value of leading null bytes and decode it for easier and more
-        #readable comparisons in the decoding logic to follow
-        while(self.value[:2] == "00"):
-            self.value = self.value[2:]
-        self.value = self.value.decode("hex")
-        
+        #Clean the value of trailing null bytes, reverse it, and decode it
+        #for easier matching and handling
+        while(self.value[-2:] == "00"):
+            self.value = self.value[:-2]
+        self.value = ''.join(reversed(self.value.decode("hex")))
         
         if self.id == 0x01F4:
             self.name = "Player Type"
@@ -177,13 +176,13 @@ class Player(Person):
     
     def __init__(self, pid, data, realm="us"):
         # TODO: get a map of realm,subregion => region in here
-        super(Player,self).__init__(pid,data[0].decode("hex"))
+        super(Player,self).__init__(pid,data[0])
         self.is_obs = False
         self.realm = realm
         self.uid = data[1][4]
         self.subregion = data[1][2]
         self.url = self.url_template % (self.realm, self.uid, self.subregion, self.name)
-        self.actual_race = data[2].decode("hex")
+        self.actual_race = data[2]
         
         # Actual race seems to be localized, so try to convert to english if possible
         

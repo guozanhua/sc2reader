@@ -2,7 +2,7 @@ from datetime import datetime
 
 from sc2reader.parsers import *
 from sc2reader.objects import *
-from sc2reader.utils import ByteStream
+from sc2reader.utils import ByteStream,SC2Buffer,LITTLE
 from sc2reader.utils import key_in_bases, timestamp_from_windows_time
 
 #####################################################
@@ -34,26 +34,24 @@ class ReplayInitDataReader(Reader):
         return True
         
     def read(self, filecontents, replay):
-        bytes = ByteStream(filecontents)
-        num_people = bytes.get_big_8()
+        bytes = SC2Buffer(filecontents)
+        num_people = bytes.read_int(bytes=1)
         for p in range(1, num_people+1):
-            name = bytes.get_string(bytes.get_big_8())
-            
+            name = bytes.read_string()
             if len(name) > 0:
                 replay.player_names.append(name)
                 
-            bytes.skip(5) #Always all zeros
+            bytes.skip(bytes=5) #Always all zeros
         
-        bytes.skip(5) # Unknown
-        bytes.get_string(4) # Always Dflt
-        bytes.skip(15) #Unknown
-        id_length = bytes.get_big_8()
-        sc_account_id = bytes.get_string(id_length)
-        bytes.skip(684) # Fixed Length data for unknown purpose
-        while( bytes.get_string(4).lower() == 's2ma' ):
-            bytes.skip(2)
-            replay.realm = bytes.get_string(2).lower()
-            unknown_map_hash = bytes.get_bytes(32)
+        bytes.skip(bytes=5) # Unknown
+        bytes.read_string(bytes=4) # Always Dflt
+        bytes.skip(bytes=15) #Unknown
+        sc_account_id = bytes.read_string()
+        bytes.skip(bytes=684) # Fixed Length data for unknown purpose
+        while( bytes.read_string(bytes=4).lower() == 's2ma' ):
+            bytes.skip(bytes=2)
+            replay.realm = bytes.read_string(bytes=2).lower()
+            unknown_map_hash = bytes.read_hex(32)
             
 #################################################
 
@@ -63,25 +61,27 @@ class AttributeEventsReader(Reader):
         return build < 17326
         
     def read(self, filecontents, replay):
-        bytes = ByteStream(filecontents)
+        bytes = SC2Buffer(filecontents,endian=LITTLE)
 		
         self.load_header(replay, bytes)
         
         replay.attributes = list()
         data = defaultdict(dict)
-        for i in range(0, bytes.get_little_32()):
+        count = bytes.read_int(bytes=4)
+        print count
+        for i in range(0, count):
             replay.attributes.append(self.load_attribute(replay, bytes))
             
     def load_header(self, replay, bytes):
-        bytes.get_little_bytes(4)
+        bytes.read_hex(bytes=4)
         
     def load_attribute(self, replay, bytes):
         #Get the attribute data elements
         attr_data = [
-                bytes.get_little_32(),                  #Header
-                bytes.get_little_32(),                  #Attr Id
-                bytes.get_little_8(),                   #Player
-                bytes.get_little_bytes(4).encode("hex") #Value
+                bytes.read_int(bytes=4),                #Header
+                bytes.read_int(bytes=4),                #Attr Id
+                bytes.read_int(bytes=1),                #Player
+                bytes.read_hex(bytes=4),                #Value
             ]
 
         #Complete the decoding in the attribute object
@@ -92,7 +92,7 @@ class AttributeEventsReader_17326(AttributeEventsReader):
         return build >= 17326
 
     def load_header(self, replay, bytes):
-        bytes.get_little_bytes(5)
+        bytes.read_hex(bytes=5)
         
 ##################################################
 
@@ -103,12 +103,13 @@ class ReplayDetailsReader(Reader):
         return True
     
     def read(self, filecontents, replay):
-        data =  ByteStream(filecontents).parse_serialized_data()
-
+        #data = ByteStream(filecontents).parse_serialized_data()
+        data =  SC2Buffer(filecontents).read_serialized_data()
+        
         for pid, pdata in enumerate(data[0]):
             replay.players.append(Player(pid+1, pdata, replay.realm)) #pid's start @ 1
             
-        replay.map = data[1].decode("hex")
+        replay.map = data[1]
         replay.file_time = data[5]
 
         # TODO: This doesn't seem to produce exactly correct results, ie. often off by one
@@ -132,27 +133,27 @@ class MessageEventsReader(Reader):
     
     def read(self, filecontents, replay):
         replay.messages = list()
-        bytes, time = ByteStream(filecontents), 0
+        bytes, time = SC2Buffer(filecontents), 0
 
         while(bytes.remaining!=0):
-            time += bytes.get_timestamp()
-            player_id = bytes.get_big_8() & 0x0F
-            flags = bytes.get_big_8()
+            time += bytes.read_timestamp()
+            player_id = bytes.read_int(bytes=1) & 0x0F
+            flags = bytes.read_int(bytes=1)
             
             if flags & 0xF0 == 0x80:
             
                 #ping or something?
                 if flags & 0x0F == 3:
-                    bytes.skip(8)
+                    bytes.skip(bytes=8)
 
                 #some sort of header code
                 elif flags & 0x0F == 0:
-                    bytes.skip(4)
+                    bytes.skip(bytes=4)
                     replay.other_people.add(player_id)
             
             elif flags & 0x80 == 0:
                 target = flags & 0x03
-                length = bytes.get_big_8()
+                length = bytes.read_int(bytes=1)
                 
                 if flags & 0x08:
                     length += 64
@@ -160,7 +161,7 @@ class MessageEventsReader(Reader):
                 if flags & 0x10:
                     length += 128
                     
-                text = bytes.get_string(length)
+                text = bytes.read_string(length)
                 replay.messages.append(Message(time, player_id, target, text))
 
 ####################################################
