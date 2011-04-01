@@ -378,6 +378,17 @@ class CameraMovementEventParser_X1(Parser):
             bytes.skip(2)
         
         return event
+
+#####################################################
+# Unknown Event Type 00 Parsers
+#####################################################
+class UnknownEventParser_0023(Parser):
+    def load(self, bytes, frames, event_type, event_code, pid):
+        event = UnknownEvent(frames, event_type, event_code, pid)
+        event.name = 'unknown0023'
+        bytes.skip(2) # <- meeee! not correct... 
+        return event
+
         
 #####################################################
 # Unknown Event Type 02 Parsers
